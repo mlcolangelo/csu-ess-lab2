@@ -1,0 +1,188 @@
+---
+title: "Lab 3: COVID-19"
+subtitle: 'Ecosystem Science and Sustainability 330'
+author:
+  - name: Mia Colangelo
+    email: miacola@colostate.edu
+format: html
+execute:
+  echo: true
+---
+
+```{r}
+library(tidyverse)
+library(flextable)
+library(zoo)
+library(ggplot2)
+library(readr)
+```
+
+```{r}
+url <- "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv"
+covid_data <- read.csv(url)
+glimpse(covid_data)
+```
+
+Question 1: Take a moment to reflect on the value of open data: How does easy access to historical and real-time environmental data shape our understanding of climate trends, resource management, and public health? What happens when this data disappears or becomes inaccessible? The role of independent archiving and collaborative stewardship has never been more critical in ensuring scientific progress and accountability.
+
+*Access to truthful and current data is critical to our understanding of the world around us because it aids us in making connections between global trends. When this data is not accessible and understandable to the public, it breeds ignorance and misinformation. People cannot fact check authority figures or press, and researchers cannot rely on poorly constructed data.*
+
+```{r}
+my_date <- as.Date("2022-01-01")
+my_state <- "Colorado"
+```
+
+```{r}
+
+colorado_data <- covid_data %>%
+  filter(state == my_state) %>%
+  arrange(county, date) %>%
+  group_by(county) %>%
+  mutate(new_cases = cases - lag(cases, default = first(cases)),
+         new_deaths = deaths - lag(deaths, default = first(deaths))) %>%
+  ungroup()
+
+worst_cumulative <- colorado_data %>%
+  filter(date == my_date) %>%
+  arrange(desc(cases)) %>%
+  head(5)
+
+worst_new <- colorado_data %>%
+  filter(date == my_date) %>%
+  arrange(desc(new_cases)) %>%
+  head(5)
+
+worst_cumulative %>% select(county, cases) %>% flextable() %>% set_caption("Top 5 Counties by Cumulative Cases")
+worst_new %>% select(county, new_cases) %>% flextable() %>% set_caption("Top 5 Counties by New Cases")
+
+
+safe_counties <- colorado_data %>%
+  filter(date == latest_date, new_cases == 0) %>%
+  select(county)
+
+num_safe_counties <- nrow(safe_counties)
+flextable(safe_counties) %>% set_caption("Counties with 0 New Cases")
+
+total_new_cases <- sum(colorado_data$new_cases[colorado_data$date == latest_date], na.rm = TRUE)
+total_cumulative_cases <- sum(colorado_data$cases[colorado_data$date == latest_date], na.rm = TRUE)
+
+report_text <- glue::glue("
+### COVID-19 Summary Report for {my_state} ({latest_date})
+
+- **Total cumulative cases:** {total_cumulative_cases}
+- **Total new cases today:** {total_new_cases}
+- **Number of safe counties (0 new cases):** {num_safe_counties}
+
+Stay safe and monitor updates regularly.
+")
+
+# Print report
+cat(report_text)
+
+
+```
+
+Question 2:
+
+```{r}
+population_data <- read_csv("/Users/miacolangelo/Desktop/ESS 330/github/lab3/data/co-est2023-alldata.csv")
+
+population_data <- population_data %>%
+  mutate(FIPS = paste0(sprintf("%02s", STATE), sprintf("%03s", COUNTY))) %>%
+  filter(COUNTY != "000") %>%
+  select(FIPS, NAME, starts_with("2021"))
+
+
+
+population_data <- population_data %>%
+  mutate(STATE = sprintf("%02d", as.numeric(STATE),
+         COUNTY = sprintf("%03d", as.numeric(COUNTY),
+         FIPS = paste0(STATE, COUNTY)) %>%
+  select(matches("NAME|2021"), FIPS) %>%
+  filter(COUNTY != "000")
+colorado_data <- colorado_data %>%
+  left_join(population_data, by = c("fips" = "FIPS")) %>%
+  mutate(per_capita_cases = cases / `2021`,
+         per_capita_new_cases = new_cases / `2021`,
+         per_capita_new_deaths = new_deaths / `2021`)
+
+top_5_cumulative_per_capita <- colorado_data %>%
+  filter(date == "2021-01-01") %>%
+  arrange(desc(per_capita_cases)) %>%
+  select(county, per_capita_cases) %>%
+  head(5)
+
+top_5_new_cases_per_capita <- colorado_data %>%
+  filter(date == "2021-01-01") %>%
+  arrange(desc(per_capita_new_cases)) %>%
+  select(county, per_capita_new_cases) %>%
+  head(5)
+
+# Count safe counties (where new cases = 0)
+num_safe_counties <- colorado_data %>%
+  filter(date == max(date, na.rm = TRUE), new_cases == 0) %>%
+  nrow()
+
+# Generate Report
+report <- paste0(
+  "COVID-19 Report for Colorado\n",
+  "Total new cases on latest date: ", sum(colorado_data$new_cases, na.rm = TRUE), "\n",
+  "Total cumulative cases: ", sum(colorado_data$cases, na.rm = TRUE), "\n",
+  "Number of safe counties (no new cases): ", num_safe_counties
+)
+
+# Print Report
+cat(report)
+
+library(flextable)
+
+# Format tables
+flextable(top_5_cumulative) %>% set_caption("Top 5 Counties by Cumulative Cases")
+flextable(top_5_new_cases) %>% set_caption("Top 5 Counties by New Cases")
+
+flextable(top_5_cumulative_per_capita) %>% set_caption("Top 5 Counties by Cumulative Cases Per Capita")
+flextable(top_5_new_cases_per_capita) %>% set_caption("Top 5 Counties by New Cases Per Capita")
+
+```
+
+7
+
+```{r}
+readr::read_csv("https://raw.githubusercontent.com/mikejohnson51/csu-ess-330/refs/heads/main/resources/county-centroids.csv")
+
+centroids <- read_csv("https://raw.githubusercontent.com/mikejohnson51/csu-ess-330/refs/heads/main/resources/county-centroids.csv")
+
+covid_with_location <- covid_data %>%
+  left_join(centroids, by = "fips")
+
+mean_center <- covid_with_location %>%
+  group_by(date) %>%
+  summarize(
+    weighted_lon = sum(LON * cases, na.rm = TRUE) / sum(cases, na.rm = TRUE),
+    weighted_lat = sum(LAT * cases, na.rm = TRUE) / sum(cases, na.rm = TRUE),
+    total_cases = sum(cases, na.rm = TRUE),
+    month = format(date, "%m")
+  )
+
+ggplot(data = mean_center, aes(x = weighted_lon, y = weighted_lat, color = month, size = total_cases)) +
+  borders("state", fill = "gray90", colour = "white") +
+  geom_point() +
+  theme_minimal() +
+  labs(
+    title = "Weighted Mean Center of COVID-19 Cases in the USA",
+    x = "Longitude",
+    y = "Latitude",
+    color = "Month",
+    size = "Total Cases"
+  )
+
+ggsave(
+  filename = "weighted_mean_center.png", 
+  plot = last_plot(),
+  width = 10, 
+  height = 6, 
+  dpi = 300
+)
+
+
+```
