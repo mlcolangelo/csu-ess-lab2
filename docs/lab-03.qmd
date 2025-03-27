@@ -111,11 +111,12 @@ population_data <- population_data %>%
 
 
 population_data <- population_data %>%
-  mutate(STATE = sprintf("%02d", as.numeric(STATE),
+  mutate(STATE = sprintf("%02d", as.numeric(STATE)),
          COUNTY = sprintf("%03d", as.numeric(COUNTY),
          FIPS = paste0(STATE, COUNTY)) %>%
   select(matches("NAME|2021"), FIPS) %>%
   filter(COUNTY != "000")
+  
 colorado_data <- colorado_data %>%
   left_join(population_data, by = c("fips" = "FIPS")) %>%
   mutate(per_capita_cases = cases / `2021`,
