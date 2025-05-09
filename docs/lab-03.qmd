@@ -10,20 +10,22 @@ format:
 execute:
   echo: true
 ---
-
+###Libraries
 ```{r}
 library(tidyverse)
 library(flextable)
 library(zoo)
+library(lubridate)
 library(ggplot2)
 library(readr)
 library(dplyr)
 ```
 
+###Data
 ```{r}
 url <- "https://raw.githubusercontent.com/nytimes/covid-19-data/master/us-counties.csv"
-covid_data <- read.csv(url)
-glimpse(covid_data)
+covid <- read.csv(url)
+glimpse(covid)
 ```
 
 Question 1: Take a moment to reflect on the value of open data: How does easy access to historical and real-time environmental data shape our understanding of climate trends, resource management, and public health? What happens when this data disappears or becomes inaccessible? The role of independent archiving and collaborative stewardship has never been more critical in ensuring scientific progress and accountability.
@@ -31,293 +33,257 @@ Question 1: Take a moment to reflect on the value of open data: How does easy ac
 *Access to truthful and current data is critical to our understanding of the world around us because it aids us in making connections between global trends. When this data is not accessible and understandable to the public, it breeds ignorance and misinformation. People cannot fact check authority figures or press, and researchers cannot rely on poorly constructed data.*
 
 ```{r}
-my_date <- as.Date("2022-01-01")
-my_state <- "Colorado"
-latest_date <- max(covid_data$date, na.rm = TRUE)
+my.date <- as.Date("2022-02-01")
+my.state <- "Colorado"
+```
 
+Question 2: Daily Summary
 
-## Question 2
+```{r}
+covid_data <- covid
 
-colorado_data <- covid_data %>%
-  filter(state == my_state) %>%
-  arrange(county, date) %>%
-  group_by(county) %>%
-  mutate(new_cases = cases - lag(cases, default = first(cases)),
-         new_deaths = deaths - lag(deaths, default = first(deaths))) %>%
+colorado <- covid_data |>
+  filter(state == my.state) |>
+  group_by(county) |>
+  arrange(date) |>
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths)) |>
   ungroup()
 
-worst_cumulative <- colorado_data %>%
-  filter(date == my_date) %>%
-  arrange(desc(cases)) %>%
-  head(5)
 
-worst_new <- colorado_data %>%
-  filter(date == my_date) %>%
-  arrange(desc(new_cases)) %>%
-  head(5)
+# Cummulative and New Cases
 
-worst_cumulative %>% select(county, cases) %>% flextable() %>% set_caption("Top 5 Counties by Cumulative Cases")
-worst_new %>% select(county, new_cases) %>% flextable() %>% set_caption("Top 5 Counties by New Cases")
+filter(colorado, date == my.date) |>
+  slice_max(cases, n = 5) |>
+  select(Date = date, County = county, Cases = cases) |>
+  flextable() |>
+  set_caption(caption = "Most Cummulative Cases")
 
-
-safe_counties <- colorado_data %>%
-  filter(date == latest_date, new_cases == 0) %>%
-  select(county)
-
-num_safe_counties <- nrow(safe_counties)
-flextable(safe_counties) %>% set_caption("Counties with 0 New Cases")
-
-total_new_cases <- sum(colorado_data$new_cases[colorado_data$date == latest_date], na.rm = TRUE)
-total_cumulative_cases <- sum(colorado_data$cases[colorado_data$date == latest_date], na.rm = TRUE)
-
-report_text <- glue::glue("
-### COVID-19 Summary Report for {my_state} ({latest_date})
-
-- **Total cumulative cases:** {total_cumulative_cases}
-- **Total new cases today:** {total_new_cases}
-- **Number of safe counties (0 new cases):** {num_safe_counties}
-
-Stay safe. Monitor updates regularly.
-")
-
-# Print report
-cat(report_text)
-
-
+filter(colorado, date == my.date) |>
+  slice_max(cases, n = 5) |>
+  select(Date = date, County = county, Cases = new_cases) |>
+  flextable() |>
+  set_caption(caption = "Most New Cases")
 ```
+Question 3: Normalizing Data
 
-Question 2:
+```{R}
+pop_url <- 'https://www2.census.gov/programs-surveys/popest/datasets/2020-2023/counties/totals/co-est2023-alldata.csv'
 
+pop_data <- read.csv(pop_url) |>
+  filter(COUNTY != "000") |>
+  mutate(fips = sprintf("%05s", paste0(STATE, COUNTY))) |>
+  select(fips, contains("NAME"), contains("2021"))
+glimpse(pop_data)
+```
+*This data contains demographic info for 3195 counties in the US in 2021, and include things that could be helpful in this lab's context such as births, deaths, and population counts. The counties are identified by FIPS as well as state and county name.*
 ```{r}
-## Question 3
-population_data <- read_csv("/Users/miacolangelo/Desktop/ESS 330/github/lab3/data/co-est2023-alldata.csv")
 
-population_data <- population_data %>%
-  mutate(STATE = as.numeric(STATE)) %>%
 
+colorado_data <- pop_data |>
+  rename(state = STNAME)|>
+  filter(state == "Colorado") |>
+  summarize(min_pop = min(POPESTIMATE2021, na.rm = TRUE),
+    max_pop = max(POPESTIMATE2021, na.rm = TRUE),
+    pop_range = max_pop - min_pop
+  )
+glimpse(colorado_data)
+```
+```{r}
+pop_data <- pop_data |> mutate(CTYNAME = str_replace(CTYNAME, " County", ""))
+
+covid_data <- covid_data |>
+  arrange(county, date) |>
+  group_by(county) |> 
+  mutate(new_cases = cases - lag(cases, default = 0)) |>
+  mutate(new_deaths = deaths - lag(deaths, default = 0)) |>
+  ungroup()
+
+colorado_combined <- covid_data |>
+  filter(state == "Colorado") |>
+  left_join(pop_data |> rename(state = STNAME, county = CTYNAME), by = c("state", "county")) |>
   mutate(
-    STATE = sprintf("%02d", STATE),
-    COUNTY = sprintf("%03s", COUNTY),
-    FIPS = paste0(STATE, COUNTY)
-  ) %>%
-  select(FIPS, NAME, starts_with("2021")) %>%
-  filter(COUNTY != "000")
-  
-population_data <- population_data %>%
-  mutate(FIPS = paste0(sprintf("%02s", STATE), sprintf("%03s", COUNTY))) %>%
-  filter(COUNTY != "000") %>%
-  select(FIPS, NAME, starts_with("2021"))
-
-
-
-population_data <- population_data %>%
-  mutate(STATE = sprintf("%02d", as.numeric(STATE)),
-         COUNTY = sprintf("%03d", as.numeric(COUNTY),
-         FIPS = paste0(STATE, COUNTY)) %>%
-  select(matches("NAME|2021"), FIPS) %>%
-  filter(COUNTY != "000")
-  
-colorado_data <- colorado_data %>%
-  left_join(population_data, by = c("fips" = "FIPS")) %>%
-  mutate(per_capita_cases = cases / `2021`,
-         per_capita_new_cases = new_cases / `2021`,
-         per_capita_new_deaths = new_deaths / `2021`)
-
-top_5_cumulative_per_capita <- colorado_data %>%
-  filter(date == "2021-01-01") %>%
-  arrange(desc(per_capita_cases)) %>%
-  select(county, per_capita_cases) %>%
-  head(5)
-
-top_5_new_cases_per_capita <- colorado_data %>%
-  filter(date == "2021-01-01") %>%
-  arrange(desc(per_capita_new_cases)) %>%
-  select(county, per_capita_new_cases) %>%
-  head(5)
-
-# Count safe counties (where new cases = 0)
-num_safe_counties <- colorado_data %>%
-  filter(date == max(date, na.rm = TRUE), new_cases == 0) %>%
-  nrow()
-
-# Generate Report
-report <- paste0(
-  "COVID-19 Report for Colorado\n",
-  "Total new cases on latest date: ", sum(colorado_data$new_cases, na.rm = TRUE), "\n",
-  "Total cumulative cases: ", sum(colorado_data$cases, na.rm = TRUE), "\n",
-  "Number of safe counties (no new cases): ", num_safe_counties
-)
-
-# Print Report
-cat(report)
-
-library(flextable)
-
-# Format tables
-flextable(top_5_cumulative) %>% set_caption("Top 5 Counties by Cumulative Cases")
-flextable(top_5_new_cases) %>% set_caption("Top 5 Counties by New Cases")
-
-flextable(top_5_cumulative_per_capita) %>% set_caption("Top 5 Counties by Cumulative Cases Per Capita")
-flextable(top_5_new_cases_per_capita) %>% set_caption("Top 5 Counties by New Cases Per Capita")
+    percapita_cumulative_cases = cases / POPESTIMATE2021,
+    percapita_new_cases = new_cases / POPESTIMATE2021,  # Now using computed new_cases
+    percapita_new_deaths = new_deaths / POPESTIMATE2021
+  )
 
 ```
 
-Question 3:
-
 ```{r}
-## Question 4
+CO_counties <- colorado_combined |>
+  filter(date == "2021-01-01") |>
+  arrange(desc(percapita_cumulative_cases)) |>
+  slice_head(n = 5)
 
-recent_data <- colorado_data %>%
-  filter(date >= max(date) - 14)
-rolling_threshold <- recent_data %>%
-  group_by(county) %>%
-  summarize(
-    new_cases_14_days = sum(daily_new_cases, na.rm = TRUE),
-    per_100k = (new_cases_14_days / `2021`) * 100000
-  ) %>%
-  arrange(desc(per_100k))
-watchlist_count <- rolling_threshold %>%
-  filter(per_100k > 100) %>%
-  nrow()
-
-recent_data <- colorado_data %>%
-  filter(date >= max(date) - 14)
-
-rolling_threshold <- recent_data %>%
-  group_by(county) %>%
-  summarize(
-    new_cases_14_days = sum(new_cases, na.rm = TRUE),
-    per_100k = (new_cases_14_days / `2021`) * 100000
-  ) %>%
-  arrange(desc(per_100k))
-
-top_5_counties <- rolling_threshold %>% head(5)
-print(top_5_counties)
-
-watchlist_count <- rolling_threshold %>%
-  filter(per_100k > 100) %>%
-  nrow()
-cat("Number of counties on the watch list:", watchlist_count)
-
-```
-
-Question 4:
-
-```{r}
-## Question 5 
-
-death_analysis <- colorado_data %>%
-  filter(format(date, "%Y") == "2021") %>%
-  group_by(county) %>%
-  summarize(
-    total_covid_deaths = sum(daily_new_deaths, na.rm = TRUE),
-    total_deaths_2021 = max(`2021_total_deaths`, na.rm = TRUE),
-    covid_death_percentage = (total_covid_deaths / total_deaths_2021) * 100
-  ) %>%
-  filter(covid_death_percentage >= 20)
-ggplot(death_analysis, aes(x = county, y = covid_death_percentage, fill = county)) +
-  geom_bar(stat = "identity") +
-  theme_minimal() +
+ggplot(CO_counties, aes(x = reorder(county, percapita_cumulative_cases), y = percapita_cumulative_cases)) +
+  geom_col(fill = "darkblue") +
   labs(
-    title = "Counties Where COVID Deaths Accounted for ≥20% of Total Deaths (2021)",
+    title = "Top 5 Counties: Cumulative COVID Cases per Capita (2021-01-01)",
     x = "County",
-    y = "COVID Death Percentage"
-  )
+    y = "Cumulative Cases Per Capita"
+  ) +
+  theme_bw()
 
+
+CO_new_counties <- colorado_combined |>
+  filter(date == "2021-01-01") |>
+  arrange(desc(percapita_new_cases)) |>
+  slice_head(n = 5)
+
+ggplot(CO_new_counties, aes(x = reorder(county, percapita_new_cases), y = percapita_new_cases)) +
+  geom_col(fill = "darkgreen") +
+  labs(
+    title = "Top 5 Counties: New COVID Cases per Capita (2021-01-01)",
+    x = "County",
+    y = "New Cases Per Capita"
+  ) +
+  theme_minimal()
 ```
-
-Question 5:
+Question 4: Rolling Thresholds
 
 ```{r}
-## Question 6
 
-state_data <- covid_data %>%
-  group_by(state, date) %>%
-  summarize(daily_new_cases = sum(cases - lag(cases, default = 0), na.rm = TRUE)) %>%
-  ungroup() %>%
-  filter(state %in% c("New York", "Colorado", "Alabama", "Ohio"))
+colorado_combined <- colorado_combined |>
+  mutate(date = as.Date(date))
 
-state_data <- state_data %>%
-  group_by(state) %>%
-  mutate(rolling_avg_cases = rollmean(daily_new_cases, k = 7, fill = NA, align = "right")) %>%
+current_date <- max(colorado_combined$date, na.rm = TRUE)
+
+current_data <- colorado_combined |>
+  filter(date >= (current_date - 13) & date <= current_date)
+```
+
+```{r}
+cases_14_summary <- current_data |>
+  group_by(county) |>
+  summarize(
+    total_new_cases = sum(new_cases, na.rm = TRUE),
+    population = first(POPESTIMATE2021),
+    cases_100k = (total_new_cases / population) * 100000) |>
+  arrange(desc(cases_100k))
+
+top_counties <- cases_14_summary |>
+  slice_head(n = 5) |>
+  print()
+
+top_counties_flextable <- top_counties |>
+  flextable() |>
+  set_header_labels(
+    county = "County",
+    total_new_cases = "Total New Cases",
+    population = "Population",
+    cases_100k = "Cases per 100k"
+  ) |>
+  colformat_num(j = c("total_new_cases", "population"), big.mark = ",", digits = 0) |>
+  colformat_num(j = "cases_100k", digits = 1) |>
+  autofit() |>
+  theme_booktabs()
+
+top_counties_flextable
+
+```
+```{r}
+watchlist_data <- cases_14_summary |>
+  filter(cases_100k > 100) |>
+  nrow()
+
+cat("Number of Counties That Meet the Watchlist Conditions:", watchlist_data)
+```
+
+
+Question 5: Death Toll
+```{r}
+covid_2021_year <- colorado_combined |>
+  filter(date >= "2021-01-01" & date <= "2021-12-31")
+
+total_deaths <- covid_2021_year |>
+  group_by(county) |>
+  summarize(total_deaths = sum(deaths, na.rm = TRUE))
+
+total_covid_deaths <- covid_2021_year |>
+  group_by(county) |>
+  summarize(total_covid_deaths = sum(new_deaths, na.rm = TRUE))
+
+deaths_merged <- total_covid_deaths|>
+  left_join(total_deaths, by = "county")
+
+
+deaths_merged <- deaths_merged |>
+  mutate(
+    covid_death_percentage = (total_covid_deaths / total_deaths) * 100
+  ) |>
+  arrange(desc(covid_death_percentage)) |>
+  glimpse()
+```
+
+```{r}
+deaths_merged <- deaths_merged |>
+  mutate(
+    covid_death_ratio = total_covid_deaths / total_deaths
+  )
+
+counties_20 <- deaths_merged |>
+  filter(covid_death_ratio >= 0.20) |>
+  arrange(desc(covid_death_ratio))
+
+ggplot(data = counties_20, mapping = aes(x = county, y = covid_death_ratio)) +
+  geom_col(fill = "darkblue") +
+  coord_flip() +
+  labs(
+    title = "Colorado Counties COVID Deaths 20% or More of the Annual Death Toll (2021)",
+    x = "County",
+    y = "Covid Death Ratio"
+  ) +
+  theme_minimal()
+```
+
+# **Question 6: Multi-state**
+
+```{r}
+state_covid <- covid_data |>
+  filter(state %in% c("New York", "Colorado", "Alabama", "Ohio")) |>
+  group_by(county) |>
+  arrange(date) |>
+  mutate(new_cases = cases - lag(cases),
+         new_deaths = deaths - lag(deaths)) |>
   ungroup()
 
-library(ggplot2)
+state_covid <- state_covid |>
+  group_by(state, county, date, new_cases) |>
+  summarize(daily_new_cases = sum(new_cases, na.rm = TRUE), .groups = "drop") |>
+  filter(state %in% c("New York", "Colorado", "Alabama", "Ohio")) |>
+  arrange(state, date)
 
-ggplot(state_data, aes(x = date, y = daily_new_cases)) +
-  geom_col(fill = "skyblue") +
-  geom_line(aes(y = rolling_avg_cases), color = "red", size = 1) +
-  facet_wrap(~ state, scales = "free_y") +
-  theme_minimal() +
-  labs(
-    title = "Daily New COVID-19 Cases and 7-Day Rolling Average",
-    x = "Date",
-    y = "Number of Cases"
-  )
-
-state_data_per_capita <- state_data %>%
-  left_join(population_data, by = "state") %>%
+state_covid <- state_covid |>
   mutate(
-    cases_per_capita = daily_new_cases / population * 100000,
-    rolling_cases_per_capita = rollmean(cases_per_capita, k = 7, fill = NA, align = "right")
-  )
-
-ggplot(state_data_per_capita, aes(x = date, y = rolling_cases_per_capita, color = state, group = state)) +
-  geom_line(size = 1) +
-  theme_minimal() +
-  labs(
-    title = "7-Day Rolling Average of COVID-19 Cases Per Capita",
-    x = "Date",
-    y = "Cases Per 100,000 People",
-    color = "State"
-  )
+    daily_new_cases = new_cases - lag(new_cases, default = 0),
+    rolling_mean_7day = rollmean(daily_new_cases, 7, fill = NA, align = "right")
+  ) |>
+  glimpse()
 
 ```
 
-Question 6:
 
 ```{r}
-## Question 7
-
-readr::read_csv("https://raw.githubusercontent.com/mikejohnson51/csu-ess-330/refs/heads/main/resources/county-centroids.csv")
-
-centroids <- read_csv("https://raw.githubusercontent.com/mikejohnson51/csu-ess-330/refs/heads/main/resources/county-centroids.csv")
-
-covid_with_location <- covid_data %>%
-  left_join(centroids, by = "fips")
-
-mean_center <- covid_with_location %>%
-  group_by(date) %>%
-  summarize(
-    weighted_lon = sum(LON * cases, na.rm = TRUE) / sum(cases, na.rm = TRUE),
-    weighted_lat = sum(LAT * cases, na.rm = TRUE) / sum(cases, na.rm = TRUE),
-    total_cases = sum(cases, na.rm = TRUE),
-    month = format(date, "%m")
+state_covid <- state_covid |>
+  mutate(
+    date = as.Date(date),
+    daily_new_cases = pmax(daily_new_cases, 0)
   )
 
-ggplot(data = mean_center, aes(x = weighted_lon, y = weighted_lat, color = month, size = total_cases)) +
-  borders("state", fill = "gray90", colour = "white") +
-  geom_point() +
-  theme_minimal() +
+ggplot(state_covid, aes(x = date, y = daily_new_cases, fill = state)) +
+  geom_col(show.legend = FALSE) + 
+  geom_line(aes(y = rolling_mean_7day, color = state), linewidth = 1.2) +
+  facet_wrap(~ state, scales = "free_y") +
+  scale_x_date(date_breaks = "3 months", date_labels = "%b %Y") +
   labs(
-    title = "Weighted Mean Center of COVID-19 Cases in the USA",
-    x = "Longitude",
-    y = "Latitude",
-    color = "Month",
-    size = "Total Cases"
-  )
-
-ggsave(
-  filename = "weighted_mean_center.png", 
-  plot = last_plot(),
-  width = 10, 
-  height = 6, 
-  dpi = 300
-)
-
+    title = "Daily New COVID Cases with 7-Day Rolling Mean",
+    x = "Date",
+    y = "New Cases"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ```
 
-Question 7: In a few sentences, describe the movement of the COVID-19 weighted mean throughout the USA and possible drivers of its movement given your knowledge of the outbreak hot spots.
-
-Question 8: As extra credit, extend your analysis in problem three to also compute the weighted mean center of daily COVID deaths. Make two plots next to each other (using patchwork) showing cases in red and deaths in navy. Once completed describe the differences in the plots and what they mean about the spatial patterns seen with COVID impacts.
+This is as far as I was able to get without errors. Thank you for the time and effort you've put into re-grading things!
